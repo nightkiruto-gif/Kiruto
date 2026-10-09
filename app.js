@@ -23,7 +23,7 @@ const firebaseConfig = {
   projectId: "truebond-f19fc",
   storageBucket: "truebond-f19fc.firebasestorage.app",
   messagingSenderId: "1053516920339",
-  appId: "1:3516920339:web:c62ea7f50a9f675f8a31e6",
+ appId: "1:1053516920339:web:c62ea7f50a9f675f8a31e6",
   measurementId: "G-RKN73F81MM"
 };
 
