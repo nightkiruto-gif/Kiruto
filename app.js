@@ -1,40 +1,453 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+
+import {
+  getAuth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  GoogleAuthProvider,
+  signInWithPopup,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  addDoc,
+  collection,
+  serverTimestamp
+} from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+
+/* Firebase configuration */
+const firebaseConfig = {
+  apiKey: "AIzaSyAXaXLDNpRpJ2y4C6r6HnJw1CKVBcneBDM",
+  authDomain: "truebond-f19fc.firebaseapp.com",
+  projectId: "truebond-f19fc",
+  storageBucket: "truebond-f19fc.firebasestorage.app",
+  messagingSenderId: "1053516920339",
+  appId: "1:1053516920339:web:c62ea7f50a9f675f8a31e6",
+  measurementId: "G-RKN73F81MM"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const googleProvider = new GoogleAuthProvider();
+
 const dialog = document.getElementById("noticeDialog");
 const dialogTitle = document.getElementById("dialogTitle");
 const dialogText = document.getElementById("dialogText");
+const dialogOk = document.getElementById("dialogOk");
+const closeDialog = document.getElementById("closeDialog");
+const createBtn = document.getElementById("createBtn");
+const joinForm = document.getElementById("joinForm");
+const codeInput = document.getElementById("codeInput");
 
 function showNotice(title, message) {
-  dialogTitle.textContent = title;
-  dialogText.textContent = message;
-  dialog.showModal();
-}
-
-document.getElementById("createBtn").addEventListener("click", () => {
-  showNotice(
-    "إنشاء الاختبار",
-    "الخطوة التالية ستكون تسجيل الدخول، ثم اختيار 20 سؤالًا من البنك أو إضافة أسئلة خاصة. لم نربط الحسابات وقاعدة البيانات بعد."
-  );
-});
-
-document.getElementById("closeDialog").addEventListener("click", () => dialog.close());
-document.getElementById("dialogOk").addEventListener("click", () => dialog.close());
-
-const codeInput = document.getElementById("codeInput");
-codeInput.addEventListener("input", () => {
-  codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6);
-});
-
-document.getElementById("joinForm").addEventListener("submit", (event) => {
-  event.preventDefault();
-  const code = codeInput.value.trim();
-
-  if (!/^\d{6}$/.test(code)) {
-    showNotice("الرمز غير مكتمل", "أدخل رمزًا مكوّنًا من 6 أرقام.");
-    codeInput.focus();
+  if (!dialog) {
+    alert(title + "\n\n" + message);
     return;
   }
 
-  showNotice(
-    "لم يتم ربط الاختبارات بعد",
-    `أدخلت الرمز ${code}. بعد ربط قاعدة البيانات سنبحث عن الاختبار ونفتح الأسئلة.`
+  const oldArea = dialog.querySelector("[data-dynamic]");
+  if (oldArea) oldArea.remove();
+
+  dialogTitle.textContent = title;
+  dialogText.textContent = message;
+  dialogText.style.whiteSpace = "pre-line";
+
+  if (dialogOk) dialogOk.hidden = false;
+  if (closeDialog) closeDialog.hidden = false;
+
+  if (!dialog.open) dialog.showModal();
+}
+
+function errorMessage(error) {
+  const messages = {
+    "auth/email-already-in-use": "هذا البريد مسجل بالفعل.",
+    "auth/invalid-email": "البريد الإلكتروني غير صحيح.",
+    "auth/weak-password": "كلمة المرور يجب أن تكون 6 أحرف على الأقل.",
+    "auth/invalid-credential": "البريد أو كلمة المرور غير صحيحة.",
+    "auth/popup-closed-by-user": "أغلقت نافذة Google قبل إكمال الدخول.",
+    "auth/popup-blocked": "المتصفح منع نافذة Google المنبثقة.",
+    "auth/unauthorized-domain": "أضف نطاق موقعك إلى Authorized domains في Firebase.",
+    "permission-denied": "رفضت قواعد Firestore العملية. تحقق من قواعد قاعدة البيانات."
+  };
+
+  return messages[error.code] || error.message || "حدث خطأ غير معروف.";
+}
+
+function addArea() {
+  const oldArea = dialog.querySelector("[data-dynamic]");
+  if (oldArea) oldArea.remove();
+
+  const area = document.createElement("div");
+  area.dataset.dynamic = "true";
+  area.style.display = "grid";
+  area.style.gap = "10px";
+  area.style.marginTop = "12px";
+
+  dialogText.insertAdjacentElement("afterend", area);
+
+  if (dialogOk) dialogOk.hidden = true;
+  if (closeDialog) closeDialog.hidden = true;
+
+  return area;
+}
+
+function makeInput(area, placeholder, type = "text") {
+  const input = document.createElement("input");
+  input.type = type;
+  input.placeholder = placeholder;
+  input.setAttribute("aria-label", placeholder);
+  input.style.padding = "12px";
+  input.style.width = "100%";
+  input.style.boxSizing = "border-box";
+  input.style.borderRadius = "8px";
+  area.appendChild(input);
+  return input;
+}
+
+function makeButton(area, text, callback) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = text;
+  button.style.padding = "12px";
+  button.style.borderRadius = "8px";
+  button.addEventListener("click", callback);
+  area.appendChild(button);
+  return button;
+}
+
+function closeActiveDialog() {
+  const area = dialog?.querySelector("[data-dynamic]");
+  if (area) area.remove();
+
+  if (dialogOk) dialogOk.hidden = false;
+  if (closeDialog) closeDialog.hidden = false;
+
+  if (dialog?.open) dialog.close();
+}
+
+function openAuth() {
+  if (!dialog) {
+    alert("تعذر فتح نافذة تسجيل الدخول.");
+    return;
+  }
+
+  closeActiveDialog();
+
+  dialogTitle.textContent = "تسجيل الدخول إلى TRUEBOND";
+  dialogText.textContent = "سجّل الدخول أو أنشئ حسابًا للمتابعة.";
+
+  const area = addArea();
+  const email = makeInput(area, "البريد الإلكتروني", "email");
+  const password = makeInput(area, "كلمة المرور", "password");
+
+  makeButton(area, "تسجيل الدخول بالبريد", async () => {
+    try {
+      if (!email.value.trim() || !password.value) {
+        dialogText.textContent = "أدخل البريد وكلمة المرور أولًا.";
+        return;
+      }
+
+      await signInWithEmailAndPassword(
+        auth,
+        email.value.trim(),
+        password.value
+      );
+
+      closeActiveDialog();
+      showNotice("مرحبًا بك!", "تم تسجيل الدخول بنجاح.");
+    } catch (error) {
+      dialogText.textContent = errorMessage(error);
+    }
+  });
+
+  makeButton(area, "إنشاء حساب بالبريد", async () => {
+    try {
+      if (!email.value.trim() || password.value.length < 6) {
+        dialogText.textContent =
+          "أدخل بريدًا صحيحًا وكلمة مرور من 6 أحرف على الأقل.";
+        return;
+      }
+
+      await createUserWithEmailAndPassword(
+        auth,
+        email.value.trim(),
+        password.value
+      );
+
+      closeActiveDialog();
+      showNotice("تم إنشاء الحساب", "يمكنك الآن استخدام TRUEBOND.");
+    } catch (error) {
+      dialogText.textContent = errorMessage(error);
+    }
+  });
+
+  makeButton(area, "تسجيل الدخول باستخدام Google", async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      closeActiveDialog();
+      showNotice("مرحبًا بك!", "تم تسجيل الدخول باستخدام Google.");
+    } catch (error) {
+      dialogText.textContent = errorMessage(error);
+    }
+  });
+
+  makeButton(area, "إغلاق", closeActiveDialog);
+
+  if (!dialog.open) dialog.showModal();
+}
+
+function ask(title, placeholder) {
+  return new Promise((resolve) => {
+    if (!dialog) {
+      resolve(prompt(title, placeholder) || "");
+      return;
+    }
+
+    closeActiveDialog();
+    dialogTitle.textContent = title;
+    dialogText.textContent = "";
+
+    const area = addArea();
+    const input = makeInput(area, placeholder);
+
+    let finished = false;
+
+    function finish(value) {
+      if (finished) return;
+      finished = true;
+      closeActiveDialog();
+      resolve(value);
+    }
+
+    makeButton(area, "متابعة", () => {
+      finish(input.value.trim());
+    });
+
+    makeButton(area, "إلغاء", () => {
+      finish("");
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(input.value.trim());
+      }
+    });
+
+    if (!dialog.open) dialog.showModal();
+    input.focus();
+  });
+}
+
+async function createQuiz() {
+  if (!auth.currentUser) {
+    openAuth();
+    return;
+  }
+
+  const title = await ask("اسم الاختبار", "مثال: هل تعرفني حقًا؟");
+  if (!title) return;
+
+  const questions = [];
+
+  for (let i = 0; i < 5; i++) {
+    const question = await ask(
+      `السؤال ${i + 1} من 5`,
+      "اكتب السؤال"
+    );
+
+    if (!question) break;
+
+    const correct = await ask(
+      "الإجابة الصحيحة",
+      "اكتب الإجابة الصحيحة"
+    );
+
+    if (!correct) break;
+
+    questions.push({ question, correct });
+  }
+
+  if (questions.length === 0) {
+    showNotice("لم يُنشأ الاختبار", "أضف سؤالًا واحدًا على الأقل.");
+    return;
+  }
+
+  try {
+    let code = null;
+    let quizRef = null;
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const candidate = String(
+        Math.floor(100000 + Math.random() * 900000)
+      );
+
+      const candidateRef = doc(db, "quizzes", candidate);
+      const existing = await getDoc(candidateRef);
+
+      if (!existing.exists()) {
+        code = candidate;
+        quizRef = candidateRef;
+        break;
+      }
+    }
+
+    if (!quizRef) {
+      throw new Error("تعذر إنشاء رمز. حاول مرة أخرى.");
+    }
+
+    await setDoc(quizRef, {
+      title,
+      ownerUid: auth.currentUser.uid,
+      ownerName:
+        auth.currentUser.displayName ||
+        auth.currentUser.email ||
+        "مستخدم TRUEBOND",
+      questions,
+      createdAt: serverTimestamp()
+    });
+
+    showNotice(
+      "تم إنشاء الاختبار!",
+      `عنوان الاختبار: ${title}\nرمز المشاركة: ${code}\nأرسل الرمز إلى أصدقائك.`
+    );
+  } catch (error) {
+    console.error("Create quiz error:", error);
+    showNotice("تعذر حفظ الاختبار", errorMessage(error));
+  }
+}
+
+async function joinQuiz(code) {
+  if (!auth.currentUser) {
+    openAuth();
+    return;
+  }
+
+  try {
+    const quizRef = doc(db, "quizzes", code);
+    const quizSnapshot = await getDoc(quizRef);
+
+    if (!quizSnapshot.exists()) {
+      showNotice("الاختبار غير موجود", "تحقق من رمز المشاركة.");
+      return;
+    }
+
+    const quiz = quizSnapshot.data();
+
+    if (!Array.isArray(quiz.questions) || quiz.questions.length === 0) {
+      showNotice("اختبار غير صالح", "لا توجد أسئلة في هذا الاختبار.");
+      return;
+    }
+
+    const answers = [];
+    let score = 0;
+
+    for (let i = 0; i < quiz.questions.length; i++) {
+      const item = quiz.questions[i];
+
+      const answer = await ask(
+        `السؤال ${i + 1} من ${quiz.questions.length}`,
+        item.question
+      );
+
+      if (!answer) {
+        showNotice("تم إلغاء الاختبار", "لم يتم إرسال إجاباتك.");
+        return;
+      }
+
+      answers.push(answer);
+
+      if (
+        answer.trim().toLowerCase() ===
+        String(item.correct).trim().toLowerCase()
+      ) {
+        score++;
+      }
+    }
+
+    await addDoc(collection(db, "quizzes", code, "attempts"), {
+      userUid: auth.currentUser.uid,
+      userName:
+        auth.currentUser.displayName ||
+        auth.currentUser.email ||
+        "مستخدم TRUEBOND",
+      answers,
+      score,
+      total: quiz.questions.length,
+      createdAt: serverTimestamp()
+    });
+
+    showNotice(
+      "اكتملت الإجابات!",
+      `الاختبار: ${quiz.title}\nنتيجتك: ${score} من ${quiz.questions.length}`
+    );
+  } catch (error) {
+    console.error("Join quiz error:", error);
+    showNotice("تعذر إكمال الاختبار", errorMessage(error));
+  }
+}
+
+/* زر إنشاء اختبار */
+if (createBtn) {
+  createBtn.addEventListener("click", async (event) => {
+    event.preventDefault();
+
+    if (!auth.currentUser) {
+      openAuth();
+      return;
+    }
+
+    try {
+      await createQuiz();
+    } catch (error) {
+      console.error("Create button error:", error);
+      showNotice("حدث خطأ", errorMessage(error));
+    }
+  });
+} else {
+  console.error("TRUEBOND: لم يتم العثور على createBtn في index.html");
+}
+
+/* نموذج إدخال رمز المشاركة */
+if (joinForm) {
+  joinForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const code = String(codeInput?.value || "").trim();
+
+    if (!/^\d{6}$/.test(code)) {
+      showNotice("رمز غير صحيح", "أدخل رمزًا من 6 أرقام.");
+      return;
+    }
+
+    if (!auth.currentUser) {
+      openAuth();
+      return;
+    }
+
+    await joinQuiz(code);
+  });
+}
+
+/* أزرار إغلاق النافذة */
+if (closeDialog) {
+  closeDialog.addEventListener("click", closeActiveDialog);
+}
+
+if (dialogOk) {
+  dialogOk.addEventListener("click", closeActiveDialog);
+}
+
+/* حالة تسجيل الدخول */
+onAuthStateChanged(auth, (user) => {
+  console.log(
+    user
+      ? "TRUEBOND: تم تسجيل الدخول"
+      : "TRUEBOND: لا يوجد مستخدم مسجل الدخول"
   );
 });
